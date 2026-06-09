@@ -1,36 +1,35 @@
+// src/App.jsx
 import { useState } from "react"
-import Navbar       from "./components/Navbar"
-import Hero         from "./components/Hero"
+import Navbar         from "./components/Navbar"
+import Hero           from "./components/Hero"
 import ProductCatalog from "./components/ProductCatalog"
-import Footer       from "./components/Footer"
-import CartOffcanvas from "./components/CartOffcanvas"
-import Checkout     from "./components/Checkout"
-import AdminLogin   from "./components/AdminLogin"
-import AdminPanel   from "./components/AdminPanel"
-import { PRODUCTS } from "./data/products"
-import { MOCK_ORDERS } from "./data/orders"
+import Footer         from "./components/Footer"
+import CartOffcanvas  from "./components/CartOffcanvas"
+import Checkout       from "./components/Checkout"
+import AdminLogin     from "./components/AdminLogin"
+import AdminPanel     from "./components/AdminPanel"
+import { PRODUCTS }   from "./data/products"
+import { supabase }   from "./lib/supabase"
 
-// TODO (T-12 — C. Pérez): Reemplazar con verificación JWT real
+// INTEGRACION T-12 (C. Perez): reemplazar con verificacion JWT real
 const ADMIN_PASSWORD = "mechitas2026"
 
 export default function App() {
-  // ── Navegación ───────────────────────────────────────────────────────────
+  // ── Navegacion ───────────────────────────────────────────────────────────
   const [view, setView] = useState("shop") // "shop" | "checkout" | "admin"
 
-  // ── Carrito ──────────────────────────────────────────────────────────────
+  // ── Carrito ───────────────────────────────────────────────────────────────
   const [cart,       setCart]       = useState([])
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  // ── Búsqueda y filtros de catálogo ───────────────────────────────────────
-  const [searchQuery,       setSearchQuery]       = useState("")
-  const [selectedCategory,  setSelectedCategory]  = useState("all")
+  // ── Catalogo ──────────────────────────────────────────────────────────────
+  const [searchQuery,      setSearchQuery]      = useState("")
+  const [selectedCategory, setSelectedCategory] = useState("all")
 
-  // ── Admin — auth y pedidos ───────────────────────────────────────────────
-  // TODO (T-04 / C. Pérez): orders debería venir del backend via useEffect + fetch
-  const [orders,      setOrders]      = useState(MOCK_ORDERS)
+  // ── Admin auth (sin persistencia — solo sesion activa) ────────────────────
   const [isAdminAuth, setIsAdminAuth] = useState(false)
 
-  // ── Operaciones de carrito ───────────────────────────────────────────────
+  // ── Operaciones de carrito ────────────────────────────────────────────────
   const addToCart = (product) => {
     setCart((prev) => {
       const ex = prev.find((i) => i.id === product.id)
@@ -43,7 +42,8 @@ export default function App() {
     setDrawerOpen(true)
   }
 
-  const removeFromCart = (id) => setCart((prev) => prev.filter((i) => i.id !== id))
+  const removeFromCart = (id) =>
+    setCart((prev) => prev.filter((i) => i.id !== id))
 
   const updateQty = (id, newQty) => {
     if (newQty <= 0) { removeFromCart(id); return }
@@ -53,7 +53,7 @@ export default function App() {
   const cartCount = cart.reduce((s, i) => s + i.qty, 0)
   const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0)
 
-  // ── Navegación ───────────────────────────────────────────────────────────
+  // ── Navegacion ────────────────────────────────────────────────────────────
   const handleNavigate = (target) => {
     setView(target)
     window.scrollTo({ top: 0, behavior: "smooth" })
@@ -65,58 +65,43 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
-  // ── Operaciones de pedidos ───────────────────────────────────────────────
-  /**
-   * Crea un pedido nuevo a partir de los datos del checkout.
-   * Retorna el ID del pedido creado.
-   * TODO (T-04 / C. Pérez): Reemplazar con POST /api/orders al backend.
-   */
-  const handlePlaceOrder = (orderData) => {
-    const newId = `ORD-${new Date().getFullYear()}-${String(Date.now()).slice(-4)}`
+  // ── Crear pedido en Supabase ──────────────────────────────────────────────
+  // Retorna el ID del pedido creado, o null si hubo error.
+  // INTEGRACION T-08 (A. Zuniga): cuando Webpay este listo, confirmar el pago
+  // antes de insertar el pedido, y guardar el token de transaccion en el registro.
+  const handlePlaceOrder = async (orderData) => {
+    const newId = `ORD-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`
     const newOrder = {
       id: newId,
-      createdAt: new Date(),
-      ...orderData,
-      status: "pending_payment",
-      statusHistory: [
+      created_at: new Date().toISOString(),
+      customer:       orderData.customer,
+      items:          orderData.items,
+      subtotal:       orderData.subtotal,
+      shipping:       orderData.shipping,
+      total:          orderData.total,
+      status:         "pending_payment",
+      status_history: [
         {
           status:    "pending_payment",
-          timestamp: new Date(),
-          note:      "Pedido recibido vía web",
+          timestamp: new Date().toISOString(),
+          note:      "Pedido recibido via web",
         },
       ],
     }
-    setOrders((prev) => [newOrder, ...prev])
-    setCart([]) // limpiar carrito después de confirmar pedido
+
+    const { error } = await supabase.from("orders").insert([newOrder])
+
+    if (error) {
+      console.error("[App] Error al crear pedido en Supabase:", error)
+      return null
+    }
+
+    setCart([]) // limpiar carrito
     return newId
   }
 
-  /**
-   * Cambia el estado de un pedido y registra el cambio en su historial.
-   * TODO (T-04 / C. Pérez): Reemplazar con PATCH /api/orders/:id/status al backend.
-   */
-  const handleUpdateStatus = (orderId, newStatus, note = "") => {
-    setOrders((prev) =>
-      prev.map((order) => {
-        if (order.id !== orderId) return order
-        return {
-          ...order,
-          status: newStatus,
-          statusHistory: [
-            ...order.statusHistory,
-            { status: newStatus, timestamp: new Date(), note },
-          ],
-        }
-      })
-    )
-  }
-
-  // ── Admin — login ────────────────────────────────────────────────────────
-  /**
-   * Verifica credenciales de administrador.
-   * TODO (T-12 / C. Pérez): Reemplazar con llamada real a POST /api/auth/login
-   * que retorne un JWT. Guardar token en React state (NO localStorage).
-   */
+  // ── Admin login ───────────────────────────────────────────────────────────
+  // INTEGRACION T-12 (C. Perez): reemplazar con llamada a POST /api/auth/login
   const handleAdminLogin = (password) => {
     if (password === ADMIN_PASSWORD) {
       setIsAdminAuth(true)
@@ -130,7 +115,7 @@ export default function App() {
     handleNavigate("shop")
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-sand font-body overflow-x-hidden">
       <Navbar
@@ -140,7 +125,6 @@ export default function App() {
         currentView={view}
       />
 
-      {/* Vista: Tienda */}
       {view === "shop" && (
         <>
           <Hero onNavigate={handleNavigate} />
@@ -155,7 +139,6 @@ export default function App() {
         </>
       )}
 
-      {/* Vista: Checkout */}
       {view === "checkout" && (
         <Checkout
           items={cart}
@@ -165,7 +148,6 @@ export default function App() {
         />
       )}
 
-      {/* Vista: Admin — Login */}
       {view === "admin" && !isAdminAuth && (
         <AdminLogin
           onLogin={handleAdminLogin}
@@ -173,19 +155,13 @@ export default function App() {
         />
       )}
 
-      {/* Vista: Admin — Panel */}
+      {/* AdminPanel carga sus propios pedidos desde Supabase */}
       {view === "admin" && isAdminAuth && (
-        <AdminPanel
-          orders={orders}
-          onUpdateStatus={handleUpdateStatus}
-          onLogout={handleAdminLogout}
-        />
+        <AdminPanel onLogout={handleAdminLogout} />
       )}
 
-      {/* Footer: oculto en el panel admin para no generar scroll innecesario */}
       {view !== "admin" && <Footer />}
 
-      {/* Carrito offcanvas — siempre disponible */}
       <CartOffcanvas
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
